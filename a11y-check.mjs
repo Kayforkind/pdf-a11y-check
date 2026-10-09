@@ -20,6 +20,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef } from 'pdf-lib';
 
+// Titles and alt text that were typed by a placeholder rather than a person.
+const PLACEHOLDER_TITLE = /^(untitled|microsoft word.*|document\d*|doc\d*|new document|\s*)$/i;
+const PLACEHOLDER_ALT = /^(image|figure|picture|photo|img|graphic|chart)[\s_-]*\d*$|\.(png|jpe?g|gif|svg|bmp|tiff?)$/i;
+
 export async function checkAccessibility(bytes) {
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: false });
   const ctx = doc.context;
@@ -38,14 +42,16 @@ export async function checkAccessibility(bytes) {
   // 2. language
   const lang = resolve(catalog.get(PDFName.of('Lang')));
   const langText = lang?.decodeText ? lang.decodeText() : lang ? String(lang) : '';
-  if (langText) add('language', 'PASS', `document language "${langText}"`);
-  else add('language', 'FAIL', 'no /Lang set on the document catalog');
+  if (!langText) add('language', 'FAIL', 'no /Lang set on the document catalog');
+  else if (!/^[a-z]{2,3}(-[A-Za-z0-9]{1,8})*$/.test(langText)) add('language', 'WARN', `/Lang "${langText}" is not a BCP 47 tag (expected something like en-US)`);
+  else add('language', 'PASS', `document language "${langText}"`);
 
   // 3. title
   const title = doc.getTitle();
   const prefs = resolve(catalog.get(PDFName.of('ViewerPreferences')));
   const showTitle = prefs instanceof PDFDict && resolve(prefs.get(PDFName.of('DisplayDocTitle')))?.toString() === 'true';
   if (!title) add('title', 'FAIL', 'no document title in metadata');
+  else if (PLACEHOLDER_TITLE.test(title.trim())) add('title', 'WARN', `title "${title}" looks like a generic placeholder`);
   else if (!showTitle) add('title', 'WARN', `title "${title}" set but DisplayDocTitle is not enabled`);
   else add('title', 'PASS', `title "${title}" shown in the viewer`);
 
@@ -63,12 +69,15 @@ export async function checkAccessibility(bytes) {
     }
   };
   if (root instanceof PDFDict) walk(root.get(PDFName.of('K')));
-  const missingAlt = figures.filter((f) => {
+  const altText = (f) => {
     const alt = resolve(f.get(PDFName.of('Alt')));
-    return !(alt && alt.decodeText && alt.decodeText().trim());
-  });
+    return alt && alt.decodeText ? alt.decodeText().trim() : '';
+  };
+  const missingAlt = figures.filter((f) => !altText(f));
+  const placeholderAlt = figures.filter((f) => altText(f) && PLACEHOLDER_ALT.test(altText(f)));
   if (figures.length === 0) add('figures', 'WARN', 'no Figure elements found (no tagged images, or none on the page)');
   else if (missingAlt.length) add('figures', 'FAIL', `${missingAlt.length} of ${figures.length} figure(s) have no alternate text`);
+  else if (placeholderAlt.length) add('figures', 'WARN', `${placeholderAlt.length} of ${figures.length} figure(s) have placeholder-looking alt text (e.g. "${altText(placeholderAlt[0])}")`);
   else add('figures', 'PASS', `all ${figures.length} figure(s) have alternate text`);
 
   // 5. tab order: keyboard focus should follow the structure, which needs /Tabs /S per page
@@ -147,5 +156,9 @@ async function main(argv) {
 }
 
 if (process.argv[1]?.endsWith('a11y-check.mjs')) {
-  main(process.argv.slice(2));
+  // Usage errors exit 2 with a one-line message, never a stack trace.
+  main(process.argv.slice(2)).catch((e) => {
+    console.error(e.message);
+    setExit(2);
+  });
 }

@@ -11,9 +11,9 @@ It is a **pre-flight, not a conformance test.** Passing it does not mean the fil
 | Check | Passes when | Fails when |
 | --- | --- | --- |
 | `tagged` | A structure tree exists and the document is marked as tagged | No structure tree, or not marked |
-| `language` | The catalog declares `/Lang` | Missing `/Lang` |
-| `title` | The metadata has a title and the viewer shows it | No title (warns if `DisplayDocTitle` is off) |
-| `figures` | Every `Figure` element has `/Alt` text | Any figure without alt text (warns if there are no figures) |
+| `language` | The catalog declares a BCP 47 `/Lang` such as `en-US` | Missing `/Lang` (fails); malformed tag like `english` (warns) |
+| `title` | The metadata has a real title and the viewer shows it | No title (fails); generic title like `Untitled` (warns); `DisplayDocTitle` off (warns) |
+| `figures` | Every `Figure` element has descriptive `/Alt` text | Any figure without alt text (fails); alt that looks like a file name or placeholder such as `image1.png` (warns); no figures at all (warns) |
 | `tab-order` | Every page sets `/Tabs /S` | Some pages do not (warning) |
 
 ## Install
@@ -59,6 +59,7 @@ A sample Markdown report is in [`examples/sample-report.md`](examples/sample-rep
 - Figure detection depends on the document tagging figures as `Figure`.
 - Encrypted files are loaded with `ignoreEncryption: false`, so they will fail to open unless they are unencrypted.
 - Scanned PDFs without OCR have no text to check.
+- Placeholder detection is pattern-based. Alt text such as "Bar chart of Q3 sales" passes; a short, vague phrase that is not on the pattern list will also pass, so a human still reads the alt text.
 
 ## License
 

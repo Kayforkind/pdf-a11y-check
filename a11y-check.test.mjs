@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -66,6 +66,51 @@ test('a tagged figure with alt text passes every check', async () => {
   assert.equal(r.summary.FAIL, 0);
   assert.equal(r.summary.WARN, 0);
   assert.equal(statusOf(r, 'figures'), 'PASS');
+});
+
+test('a malformed language tag is a warning, not a pass', async () => {
+  const r = await checkAccessibility(await (await basePdf({ title: 'Report', lang: 'english' })).save());
+  assert.equal(statusOf(r, 'language'), 'WARN');
+  assert.match(r.checks.find((c) => c.id === 'language').detail, /not a BCP 47 tag/);
+});
+
+test('a generic title such as "Untitled" is flagged as a placeholder', async () => {
+  const r = await checkAccessibility(await (await basePdf({ title: 'Untitled', lang: 'en-US' })).save());
+  assert.equal(statusOf(r, 'title'), 'WARN');
+  assert.match(r.checks.find((c) => c.id === 'title').detail, /generic placeholder/);
+});
+
+test('placeholder alt text such as a file name is flagged, and descriptive alt is not', async () => {
+  const placeholder = await basePdf({ title: 'Report', lang: 'en-US' });
+  tagWithFigure(placeholder, { alt: 'image1.png' });
+  const r1 = await checkAccessibility(await placeholder.save());
+  assert.equal(statusOf(r1, 'figures'), 'WARN');
+  assert.match(r1.checks.find((c) => c.id === 'figures').detail, /placeholder-looking alt text/);
+
+  const good = await basePdf({ title: 'Report', lang: 'en-US' });
+  tagWithFigure(good, { alt: 'Bar chart of Q3 sales' });
+  assert.equal(statusOf(await checkAccessibility(await good.save()), 'figures'), 'PASS');
+});
+
+test('CLI: a missing file or unknown flag exits 2 with a one-line message, not a stack trace', () => {
+  const missing = spawnSync(process.execPath, [CLI, join(tmpdir(), 'no-such-file-xyz.pdf')], { encoding: 'utf8' });
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /cannot read/);
+  assert.ok(!missing.stderr.includes('    at '));
+  const bogus = spawnSync(process.execPath, [CLI, '--bogus'], { encoding: 'utf8' });
+  assert.equal(bogus.status, 2);
+  assert.ok(!bogus.stderr.includes('    at '));
+});
+
+test('CLI: a tagged, titled, sourced PDF passes with exit 0', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'a11y-'));
+  const doc = await basePdf({ title: 'Quarterly report', lang: 'en-US' });
+  doc.getPage(0).node.set(PDFName.of('Tabs'), PDFName.of('S'));
+  tagWithFigure(doc, { alt: 'Bar chart of Q3 sales' });
+  const file = join(dir, 'ok.pdf');
+  writeFileSync(file, await doc.save());
+  const r = spawnSync(process.execPath, [CLI, file, '--fail-on', 'warn'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 
 test('tab-order warns when pages do not set /Tabs /S', async () => {
