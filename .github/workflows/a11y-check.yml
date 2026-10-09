@@ -1,5 +1,7 @@
 name: pdf-a11y
-on: [pull_request]
+on:
+  pull_request:
+  workflow_dispatch:
 jobs:
   preflight:
     runs-on: ubuntu-latest
@@ -10,7 +12,10 @@ jobs:
           node-version: 22
       - run: npm ci
       - name: Check every PDF in docs/
-        run: node a11y-check.mjs docs/*.pdf --md a11y-report.md --fail-on warn
+        run: |
+          files=$(find docs -name "*.pdf")
+          if [ -z "$files" ]; then echo "pdf-a11y: no PDFs found in docs/"; exit 1; fi
+          node a11y-check.mjs $files --md a11y-report.md --fail-on warn
       - name: Show report
         if: always()
-        run: cat a11y-report.md >> "$GITHUB_STEP_SUMMARY"
+        run: '[ -f a11y-report.md ] && cat a11y-report.md >> "$GITHUB_STEP_SUMMARY" || true'
