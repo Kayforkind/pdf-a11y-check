@@ -1,0 +1,16 @@
+name: pdf-a11y
+on: [pull_request]
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Check every PDF in docs/
+        run: node a11y-check.mjs docs/*.pdf --md a11y-report.md --fail-on warn
+      - name: Show report
+        if: always()
+        run: cat a11y-report.md >> "$GITHUB_STEP_SUMMARY"
