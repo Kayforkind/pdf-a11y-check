@@ -27,7 +27,7 @@ Requires Node 20+. The only dependency is `pdf-lib`.
 ## Usage
 
 ```bash
-node a11y-check.mjs contract.pdf
+node a11y-check.mjs examples/sample-untagged.pdf
 node a11y-check.mjs docs/*.pdf --md report.md --json report.json --fail-on warn
 ```
 
