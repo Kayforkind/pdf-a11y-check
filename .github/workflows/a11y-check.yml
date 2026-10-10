@@ -2,20 +2,24 @@ name: pdf-a11y
 on:
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   preflight:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
-      - run: npm ci
-      - name: Check every PDF in docs/
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm run verify
+      - name: Confirm the bad fixture is rejected
         run: |
-          files=$(find docs -name "*.pdf")
-          if [ -z "$files" ]; then echo "pdf-a11y: no PDFs found in docs/"; exit 1; fi
-          node a11y-check.mjs $files --md a11y-report.md --fail-on warn
+          status=0
+          node a11y-check.mjs examples/sample-untagged.pdf --md a11y-report.md --fail-on warn || status=$?
+          if [ "$status" -ne 1 ]; then echo "Expected preflight failure 1; got $status"; exit 1; fi
       - name: Show report
         if: always()
-        run: '[ -f a11y-report.md ] && cat a11y-report.md >> "$GITHUB_STEP_SUMMARY" || true'
+        run: 'if [ -f a11y-report.md ]; then cat a11y-report.md >> "$GITHUB_STEP_SUMMARY"; fi'

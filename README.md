@@ -1,4 +1,6 @@
-# a11y-check
+# a11y-check 1.1.2
+
+> A bounded PDF accessibility pre-flight. Heuristic only; not PDF/UA certification.
 
 **A fast accessibility pre-flight for PDFs, built for CI.**
 
@@ -61,6 +63,16 @@ A sample Markdown report is in [`examples/sample-report.md`](examples/sample-rep
 - Scanned PDFs without OCR have no text to check.
 - Placeholder detection is pattern-based. Alt text such as "Bar chart of Q3 sales" passes; a short, vague phrase that is not on the pattern list will also pass, so a human still reads the alt text.
 
+## Security
+
+PDFs are parsed locally, not executed or uploaded. Inputs must be regular files under 25 MiB. Structure-tree cycles, shared nodes, depth over 200 and more than 50,000 nodes stop the audit with an error rather than silently producing a pass. Markdown escapes PDF metadata and filenames; report paths cannot overwrite input PDFs or each other.
+
+These bounds do not make the PDF parser a sandbox or prevent all compressed-input resource exhaustion. Process untrusted uploads in an isolated worker with OS memory/time limits. Passing this pre-flight is not PDF/UA certification or malware clearance.
+
 ## License
 
 MIT
+
+## Release verification
+
+Use a supported Node LTS (22 or 24). Run `npm ci --ignore-scripts` followed by `npm run verify`. The security workflow runs the regression suite on Linux and Windows; it has not yet been executed remotely for this local change. New report/output files are created exclusively; choose fresh filenames or output folders for repeat runs. See [SECURITY.md](SECURITY.md) for the threat model and disclosure guidance.

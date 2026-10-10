@@ -121,6 +121,27 @@ test('tab-order warns when pages do not set /Tabs /S', async () => {
   assert.equal(statusOf(fixed, 'tab-order'), 'PASS');
 });
 
+test('cyclic structure trees and oversized PDFs fail closed', async () => {
+  const doc = await basePdf();
+  const root = doc.context.obj({ Type: 'StructTreeRoot' });
+  const ref = doc.context.register(root);
+  root.set(PDFName.of('K'), ref);
+  doc.catalog.set(PDFName.of('StructTreeRoot'), ref);
+  await assert.rejects(checkAccessibility(await doc.save()), /cyclic/);
+  await assert.rejects(checkAccessibility(new Uint8Array(25 * 1024 * 1024 + 1)), /25 MiB/);
+});
+
+test('report escapes malicious PDF metadata and CLI refuses input overwrite', async () => {
+  const doc = await basePdf({ title: '<img src=x onerror=alert(1)>', lang: 'en' });
+  const report = await checkAccessibility(await doc.save());
+  const markdown = toMarkdown([{ file: '<script>x</script>.pdf', report }]);
+  assert.ok(!markdown.includes('<img') && !markdown.includes('<script>'));
+  const root = mkdtempSync(join(tmpdir(), 'a11y-sec-'));
+  const file = join(root, 'x.pdf');
+  writeFileSync(file, await doc.save());
+  assert.equal(spawnSync(process.execPath, [CLI, file, '--md', file]).status, 2);
+});
+
 test('markdown report lists every check with escaped details', async () => {
   const r = await checkAccessibility(await (await basePdf()).save());
   const md = toMarkdown([{ file: 'x.pdf', report: r }]);

@@ -16,7 +16,9 @@
  *   a11y-check file.pdf [more.pdf ...] [--json out.json] [--md out.md] [--fail-on fail|warn]
  * Exit: 0 clean · 1 failure (or warning with --fail-on warn) · 2 unreadable input
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, statSync, existsSync, realpathSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef } from 'pdf-lib';
 
@@ -25,7 +27,8 @@ const PLACEHOLDER_TITLE = /^(untitled|microsoft word.*|document\d*|doc\d*|new do
 const PLACEHOLDER_ALT = /^(image|figure|picture|photo|img|graphic|chart)[\s_-]*\d*$|\.(png|jpe?g|gif|svg|bmp|tiff?)$/i;
 
 export async function checkAccessibility(bytes) {
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: false });
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength > 25 * 1024 * 1024) throw new Error('PDF input must be bytes under 25 MiB');
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: false, throwOnInvalidObject: true });
   const ctx = doc.context;
   const catalog = doc.catalog;
   const resolve = (x) => (x instanceof PDFRef ? ctx.lookup(x) : x);
@@ -57,9 +60,16 @@ export async function checkAccessibility(bytes) {
 
   // 4. figures
   const figures = [];
+  const seen = new Set();
   const walk = (node, depth = 0) => {
-    if (depth > 200) return;
+    if (node === undefined) return;
+    if (depth > 200) throw new Error('structure tree exceeds depth limit; cannot complete audit');
     const obj = resolve(node);
+    if (obj instanceof PDFArray || obj instanceof PDFDict) {
+      if (seen.has(obj)) throw new Error('cyclic or shared structure node; cannot complete audit');
+      seen.add(obj);
+      if (seen.size > 50000) throw new Error('structure tree exceeds node limit');
+    }
     if (obj instanceof PDFArray) {
       for (let i = 0; i < obj.size(); i++) walk(obj.get(i), depth + 1);
     } else if (obj instanceof PDFDict) {
@@ -94,12 +104,14 @@ export async function checkAccessibility(bytes) {
   };
 }
 
+const md = (s) => String(s).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]).replace(/([\\|`*_\[\]])/g, '\\$1');
+
 export function toMarkdown(results) {
   const lines = ['# PDF accessibility pre-flight', ''];
   for (const { file, report } of results) {
-    lines.push(`## ${file}`, '', `${report.pages} page(s) · ${report.summary.PASS} pass · ${report.summary.WARN} warn · ${report.summary.FAIL} fail`, '');
+    lines.push(`## ${md(file)}`, '', `${report.pages} page(s) · ${report.summary.PASS} pass · ${report.summary.WARN} warn · ${report.summary.FAIL} fail`, '');
     lines.push('| Check | Status | Detail |', '| --- | --- | --- |');
-    for (const c of report.checks) lines.push(`| ${c.id} | ${c.status} | ${c.detail.replace(/\|/g, '\\|')} |`);
+    for (const c of report.checks) lines.push(`| ${c.id} | ${c.status} | ${md(c.detail)} |`);
     lines.push('');
   }
   lines.push('_Heuristic pre-flight, not a PDF/UA conformance report._', '');
@@ -131,9 +143,14 @@ async function main(argv) {
     console.error('--fail-on must be "fail" or "warn"');
     return setExit(2);
   }
+  const outputs = [values.json, values.md].filter(Boolean).map((p) => existsSync(p) ? realpathSync(p) : resolvePath(p));
+  const inputs = positionals.map((p) => existsSync(p) ? realpathSync(p) : resolvePath(p));
+  if (outputs.some((p) => inputs.includes(p)) || new Set(outputs).size !== outputs.length) throw new Error('report paths must differ from inputs and each other');
+  if ([values.json, values.md].filter(Boolean).some((p) => existsSync(p))) throw new Error('report output already exists; choose a new filename');
   const results = [];
   for (const file of positionals) {
     try {
+      if (!statSync(file).isFile() || statSync(file).size > 25 * 1024 * 1024) throw new Error('input must be a regular PDF under 25 MiB');
       results.push({ file, report: await checkAccessibility(new Uint8Array(readFileSync(file))) });
     } catch (e) {
       console.error(`cannot read ${file}: ${e.message}`);
@@ -142,12 +159,12 @@ async function main(argv) {
   }
   if (values.json) {
     const payload = results.length === 1 ? results[0].report : results;
-    writeFileSync(values.json, JSON.stringify(payload, null, 2) + '\n');
+    writeFileSync(values.json, JSON.stringify(payload, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   }
-  if (values.md) writeFileSync(values.md, toMarkdown(results));
+  if (values.md) writeFileSync(values.md, toMarkdown(results), { flag: 'wx', mode: 0o600 });
   for (const { file, report } of results) {
     console.log(`\n${file}`);
-    for (const c of report.checks) console.log(`  ${c.status.padEnd(4)} ${c.id.padEnd(10)} ${c.detail}`);
+    for (const c of report.checks) console.log(`  ${c.status.padEnd(4)} ${c.id.padEnd(10)} ${c.detail.replace(/[\x00-\x1f\x7f]/g, ' ')}`);
     console.log(`  ${report.pages} page(s): ${report.summary.PASS} pass, ${report.summary.WARN} warn, ${report.summary.FAIL} fail`);
   }
   const fail = results.some((r) => r.report.summary.FAIL > 0);
@@ -155,7 +172,7 @@ async function main(argv) {
   return setExit(fail || (values['fail-on'] === 'warn' && warn) ? 1 : 0);
 }
 
-if (process.argv[1]?.endsWith('a11y-check.mjs')) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   // Usage errors exit 2 with a one-line message, never a stack trace.
   main(process.argv.slice(2)).catch((e) => {
     console.error(e.message);
